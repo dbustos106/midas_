@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Perro o Gato 🐶🐱</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+<style>
+  :root{
+    --bg:#1a1a2e;
+    --card:#16213e;
+    --accent:#e94560;
+    --accent2:#0f9b8e;
+    --text:#f1f1f1;
+    --muted:#8892b0;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    min-height:100vh;
+    background:var(--bg);
+    color:var(--text);
+    font-family:'Segoe UI', system-ui, sans-serif;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    padding:24px 16px 48px;
+  }
+  h1{
+    font-size:1.6rem;
+    margin:8px 0 4px;
+    text-align:center;
+  }
+  p.sub{
+    color:var(--muted);
+    margin:0 0 20px;
+    text-align:center;
+    font-size:0.95rem;
+  }
+  .card{
+    background:var(--card);
+    border-radius:16px;
+    padding:20px;
+    box-shadow:0 10px 30px rgba(0,0,0,0.4);
+    width:100%;
+    max-width:480px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:16px;
+  }
+  video, canvas{
+    border-radius:12px;
+    background:#000;
+  }
+  #video{
+    width:100%;
+    max-width:400px;
+    transform:scaleX(-1); /* efecto espejo, más natural */
+  }
+  #preview{
+    display:none;
+  }
+  button{
+    background:var(--accent);
+    color:white;
+    border:none;
+    padding:14px 28px;
+    font-size:1rem;
+    font-weight:600;
+    border-radius:999px;
+    cursor:pointer;
+    transition:transform 0.15s ease, background 0.2s ease;
+  }
+  button:hover{ transform:translateY(-2px); }
+  button:disabled{
+    background:#555;
+    cursor:not-allowed;
+    transform:none;
+  }
+  #resultado{
+    font-size:1.6rem;
+    font-weight:700;
+    min-height:2.4rem;
+    text-align:center;
+  }
+  #confianza{
+    color:var(--muted);
+    font-size:0.9rem;
+  }
+  #estado{
+    color:var(--muted);
+    font-size:0.85rem;
+    text-align:center;
+  }
+  .gato{ color:var(--accent2); }
+  .perro{ color:var(--accent); }
+</style>
+</head>
+<body>
+
+  <h1>🐶 ¿Perro o Gato? 🐱</h1>
+  <p class="sub">Apunta la cámara y descubre qué detecta el modelo</p>
+
+  <div class="card">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="preview" width="100" height="100"></canvas>
+
+    <div id="estado">Cargando modelo...</div>
+
+    <button id="btnCapturar" disabled>📸 Analizar</button>
+
+    <div id="resultado"></div>
+    <div id="confianza"></div>
+  </div>
+
+<script>
+// ============================================================
+// CONFIGURACIÓN
+// ============================================================
+// Ruta al model.json generado por tensorflowjs_converter a partir
+// del SavedModel (carpeta "carpeta_salida_graph" del notebook).
+// Debe estar junto a este archivo HTML, servido con un servidor
+// local (no funciona abriendo el HTML directo con doble clic).
+const RUTA_MODELO = './carpeta_salida_graph/model.json';
+
+// Según el orden de clases del dataset cats_vs_dogs de TFDS,
+// la etiqueta 0 = gato, 1 = perro. Si tu modelo imprime al
+// revés, simplemente invierte estos dos textos.
+const ETIQUETAS = ['Gato 🐱', 'Perro 🐶'];
+
+const TAMANIO = 100; // debe coincidir con tam_imagen del notebook
+// ============================================================
+
+const video = document.getElementById('video');
+const preview = document.getElementById('preview');
+const btn = document.getElementById('btnCapturar');
+const estado = document.getElementById('estado');
+const resultado = document.getElementById('resultado');
+const confianza = document.getElementById('confianza');
+
+let modelo = null;
+
+async function iniciar() {
+  // 1. Pedir acceso a la cámara
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' },
+      audio: false
+    });
+    video.srcObject = stream;
+  } catch (err) {
+    estado.textContent = 'No se pudo acceder a la cámara: ' + err.message;
+    return;
+  }
+
+  // 2. Cargar el modelo
+  // Nota: usamos loadGraphModel (no loadLayersModel) porque el modelo
+  // se convirtió desde un SavedModel de TensorFlow, no desde un .h5/.keras
+  // de Keras. Esto evita los problemas de compatibilidad con Keras 3.
+  try {
+    modelo = await tf.loadGraphModel(RUTA_MODELO);
+    estado.textContent = 'Modelo listo ✅';
+    btn.disabled = false;
+  } catch (err) {
+    estado.textContent = 'Error cargando el modelo. Revisa la ruta "' + RUTA_MODELO + '" (' + err.message + ')';
+  }
+}
+
+function capturarFrameGris() {
+  const ctx = preview.getContext('2d', { willReadFrequently: true });
+  // Dibujamos el frame actual del video redimensionado a 100x100
+  ctx.drawImage(video, 0, 0, TAMANIO, TAMANIO);
+  const frame = ctx.getImageData(0, 0, TAMANIO, TAMANIO);
+
+  // Convertimos a escala de grises (mismo preprocesamiento que cv2.cvtColor)
+  const gris = new Float32Array(TAMANIO * TAMANIO);
+  for (let i = 0; i < TAMANIO * TAMANIO; i++) {
+    const r = frame.data[i * 4];
+    const g = frame.data[i * 4 + 1];
+    const b = frame.data[i * 4 + 2];
+    // Fórmula estándar de luminancia (similar a la que usa OpenCV)
+    gris[i] = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  }
+  return gris;
+}
+
+async function analizar() {
+  if (!modelo) return;
+  btn.disabled = true;
+  resultado.textContent = '';
+  resultado.className = '';
+  confianza.textContent = '';
+  estado.textContent = 'Analizando...';
+
+  const grisArray = capturarFrameGris();
+
+  const prediccion = tf.tidy(() => {
+    const tensor = tf.tensor4d(grisArray, [1, TAMANIO, TAMANIO, 1]);
+    return modelo.predict(tensor);
+  });
+
+  const valor = (await prediccion.data())[0];
+  prediccion.dispose();
+
+  const esPerro = valor >= 0.5;
+  const etiqueta = esPerro ? ETIQUETAS[1] : ETIQUETAS[0];
+  const prob = esPerro ? valor : 1 - valor;
+
+  resultado.textContent = etiqueta;
+  resultado.className = esPerro ? 'perro' : 'gato';
+  confianza.textContent = 'Confianza: ' + (prob * 100).toFixed(1) + '%';
+  estado.textContent = 'Modelo listo ✅';
+  btn.disabled = false;
+}
+
+btn.addEventListener('click', analizar);
+iniciar();
+</script>
+</body>
+</html>
