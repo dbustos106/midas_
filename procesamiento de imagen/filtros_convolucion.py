@@ -101,6 +101,18 @@ def convolve2d(canal, kernel):
             salida += kernel[i, j] * padded[i:i + h, j:j + w]
     return salida
 
+    '''
+    En vez de recorrer cada píxel y multiplicar su vecindario por el kernel 
+    (lo que sería lento, con 4 bucles anidados), se invierte el orden: 
+    por cada posición del kernel (i, j), se toma la imagen completa desplazada 
+    y se multiplica por ese único número del kernel.
+
+    padded[i:i+h, j:j+w] es una “ventana” del tamaño de la imagen original, 
+    pero corrida i filas y j columnas dentro de padded. 
+    Esa ventana contiene, para cada píxel de la imagen, el vecino que está en la 
+    posición (i, j) del kernel.
+    '''
+
 
 def aplicar_filtro(img, kernel, es_borde=False):
     """Aplica el kernel a cada canal de una imagen (H, W, 3) en float [0, 255]."""
