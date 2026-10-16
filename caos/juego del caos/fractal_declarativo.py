@@ -103,7 +103,7 @@ def preset_tetraedro():
 PRESETS = {"arbol": preset_arbol, "koch": preset_koch, "tetraedro": preset_tetraedro}
 
 # Elige cuál animar: "arbol", "koch" o "tetraedro"
-PRESET = "tetraedro"
+PRESET = "arbol"
 
 
 # ---------------------------------------------------------------------
