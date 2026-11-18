@@ -1,0 +1,12 @@
+flask>=3.0
+gunicorn>=22.0
+langchain-core>=0.3
+langchain-ollama>=0.3
+langchain-mcp-adapters>=0.1
+langchain-qdrant>=0.2
+langchain-text-splitters>=0.3
+qdrant-client>=1.9
+langgraph>=0.6
+langgraph-checkpoint-postgres>=2.0
+psycopg[binary,pool]>=3.2
+pydantic>=2.7

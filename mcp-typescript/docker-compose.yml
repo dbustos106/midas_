@@ -1,0 +1,172 @@
+# CPU:  docker compose --profile cpu up -d --build
+# GPU:  docker compose --profile gpu-nvidia up -d --build
+
+# =============================
+#  Templates
+# =============================
+
+x-ollama: &base-ollama
+  image: ollama/ollama:latest
+  environment:
+    OLLAMA_MAX_LOADED_MODELS: "1"
+    OLLAMA_NUM_PARALLEL: "1"
+  networks:
+    rag_network:
+      aliases: ["ollama"]
+  restart: unless-stopped
+  ports:
+    - "127.0.0.1:11434:11434"
+  volumes:
+    - ollama_data:/root/.ollama
+
+x-init-ollama: &init-ollama
+  image: ollama/ollama:latest
+  networks: ["rag_network"]
+  entrypoint: /bin/sh
+  environment:
+    OLLAMA_HOST: ollama:11434
+  volumes:
+    - ollama_data:/root/.ollama
+  command:
+    - "-c"
+    - |
+      until ollama list >/dev/null 2>&1; do sleep 2; done \
+      && ollama pull ${EMBED_MODEL:-nomic-embed-text} \
+      && ollama pull ${SUPERVISOR_MODEL:-llama3.2} \
+      && ollama pull ${WORKER_MODEL:-llama3.2}
+
+# =============================
+#  SERVICIOS
+# =============================
+
+services:
+
+  # ---- Memoria (checkpointer de LangGraph) ----
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    networks: ["rag_network"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---- Base vectorial (RAG) ----
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    networks: ["rag_network"]
+    restart: unless-stopped
+    environment:
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  # ---- LLMs ----
+  ollama:
+    profiles: ["cpu"]
+    <<: *base-ollama
+    container_name: ollama
+
+  ollama-pull-models-cpu:
+    profiles: ["cpu"]
+    <<: *init-ollama
+    container_name: ollama-pull-models-cpu
+    depends_on:
+      - ollama
+
+  ollama-gpu:
+    profiles: ["gpu-nvidia"]
+    <<: *base-ollama
+    container_name: ollama-gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  ollama-pull-models-gpu:
+    profiles: ["gpu-nvidia"]
+    <<: *init-ollama
+    container_name: ollama-pull-models-gpu
+    depends_on:
+      - ollama-gpu
+
+  # ---- Servidor MCP (TypeScript) ----
+  mcp-server:
+    container_name: mcp-server
+    build:
+      context: ./mcp_server
+      dockerfile: Dockerfile
+    networks: ["rag_network"]
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  # ---- Agente LangGraph + Flask ----
+  agent-client:
+    container_name: agent-client
+    build:
+      context: ./agent_client
+      dockerfile: Dockerfile
+    networks: ["rag_network"]
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
+      MCP_URL: http://mcp-server:3000/mcp
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
+      SUPERVISOR_MODEL: ${SUPERVISOR_MODEL:-llama3.2}
+      WORKER_MODEL: ${WORKER_MODEL:-llama3.2}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+      EMBED_DIM: ${EMBED_DIM:-768}
+      SEED_SAMPLE: ${SEED_SAMPLE:-true}
+    ports:
+      - "127.0.0.1:8002:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      mcp-server:
+        condition: service_started
+      ollama-pull-models-cpu:
+        condition: service_completed_successfully
+        required: false
+      ollama-pull-models-gpu:
+        condition: service_completed_successfully
+        required: false
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+networks:
+  rag_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  ollama_data:
+  qdrant_data:

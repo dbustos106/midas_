@@ -60,16 +60,7 @@ server.registerTool(
     async ({ city }) => {
         const output = { result: `The weather in ${city} is soleado` };
         return {
-            content: [
-                { type: 'text', text: JSON.stringify(output) },
-                {
-                    type: 'resource_link',
-                    uri: 'localfile://readme.md',
-                    name: 'README.md',
-                    mimeType: 'text/markdown',
-                    description: 'A README file'
-                },
-            ],
+            content: [{ type: 'text', text: JSON.stringify(output) },],
             structuredContent: output
         };
     }
